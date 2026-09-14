@@ -1,6 +1,7 @@
 import streamlit as st
 import sqlite3
 from datetime import date, datetime, timedelta
+import time
 
 # =========================
 # 基本設定
@@ -69,6 +70,23 @@ def save_record(subject, minutes, memo=""):
         minutes,
         memo
     ))
+
+    conn.commit()
+    conn.close()
+
+
+# =========================
+# 勉強記録を削除
+# =========================
+
+def delete_record(record_id):
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    cursor.execute("""
+    DELETE FROM study_records
+    WHERE id = ?
+    """, (record_id,))
 
     conn.commit()
     conn.close()
@@ -263,6 +281,12 @@ timer_minutes = st.number_input(
     step=5
 )
 
+# メモ
+timer_memo = st.text_input(
+    "📝 勉強メモ（任意）",
+    placeholder="例：英語長文ポラリス1を1題"
+)
+
 
 # =========================
 # タイマー開始
@@ -270,11 +294,22 @@ timer_minutes = st.number_input(
 
 if not st.session_state.timer_running:
 
-    if st.button("▶️ 勉強開始", use_container_width=True):
+    if st.button(
+        "▶️ 勉強開始",
+        use_container_width=True
+    ):
 
         st.session_state.timer_subject = subject
-        st.session_state.timer_total_seconds = timer_minutes * 60
-        st.session_state.timer_remaining_seconds = timer_minutes * 60
+        st.session_state.timer_memo = timer_memo
+
+        st.session_state.timer_total_seconds = (
+            timer_minutes * 60
+        )
+
+        st.session_state.timer_remaining_seconds = (
+            timer_minutes * 60
+        )
+
         st.session_state.timer_end_time = (
             datetime.now()
             + timedelta(minutes=timer_minutes)
@@ -292,7 +327,6 @@ if not st.session_state.timer_running:
 
 if st.session_state.timer_running:
 
-    # 一時停止していない場合
     if not st.session_state.timer_paused:
 
         remaining_seconds = int(
@@ -307,7 +341,9 @@ if st.session_state.timer_running:
             0
         )
 
-    remaining_seconds = st.session_state.timer_remaining_seconds
+    remaining_seconds = (
+        st.session_state.timer_remaining_seconds
+    )
 
     minutes_left = remaining_seconds // 60
     seconds_left = remaining_seconds % 60
@@ -340,7 +376,10 @@ if st.session_state.timer_running:
         save_record(
             st.session_state.timer_subject,
             timer_minutes,
-            "タイマー完了"
+            st.session_state.get(
+                "timer_memo",
+                "タイマー完了"
+            )
         )
 
         st.session_state.timer_running = False
@@ -357,161 +396,11 @@ if st.session_state.timer_running:
 
 
     # =========================
-    # 一時停止
+    # 一時停止・再開
     # =========================
 
     col1, col2 = st.columns(2)
 
     with col1:
 
-        if not st.session_state.timer_paused:
-
-            if st.button(
-                "⏸️ 一時停止",
-                use_container_width=True
-            ):
-
-                st.session_state.timer_paused = True
-                st.rerun()
-
-        else:
-
-            if st.button(
-                "▶️ 再開",
-                use_container_width=True
-            ):
-
-                st.session_state.timer_end_time = (
-                    datetime.now()
-                    + timedelta(
-                        seconds=st.session_state.timer_remaining_seconds
-                    )
-                )
-
-                st.session_state.timer_paused = False
-                st.rerun()
-
-
-    # =========================
-    # タイマー終了ボタン
-    # =========================
-
-    with col2:
-
-        if st.button(
-            "⏹️ 終了して記録",
-            use_container_width=True
-        ):
-
-            elapsed_seconds = (
-                st.session_state.timer_total_seconds
-                - st.session_state.timer_remaining_seconds
-            )
-
-            elapsed_minutes = max(
-                elapsed_seconds // 60,
-                1
-            )
-
-            save_record(
-                st.session_state.timer_subject,
-                elapsed_minutes,
-                "タイマー途中終了"
-            )
-
-            st.session_state.timer_running = False
-            st.session_state.timer_paused = False
-            st.session_state.timer_end_time = None
-
-            st.success(
-                f"📝 {elapsed_minutes}分を勉強記録に保存しました！"
-            )
-
-            st.rerun()
-
-
-    # 1秒ごとに画面更新
-    if not st.session_state.timer_paused:
-        import time
-        time.sleep(1)
-        st.rerun()
-
-
-st.divider()
-
-
-# =========================
-# 科目別勉強時間
-# =========================
-
-st.header("📚 科目別勉強時間")
-
-conn = get_connection()
-cursor = conn.cursor()
-
-cursor.execute("""
-SELECT subject, SUM(minutes)
-FROM study_records
-GROUP BY subject
-ORDER BY SUM(minutes) DESC
-""")
-
-subject_records = cursor.fetchall()
-
-conn.close()
-
-if subject_records:
-
-    for subject_name, minutes in subject_records:
-
-        st.write(
-            f"**{subject_name}**　{minutes}分"
-        )
-
-else:
-
-    st.write("まだ勉強記録がありません。")
-
-
-st.divider()
-
-
-# =========================
-# 最近の勉強記録
-# =========================
-
-st.header("📝 最近の勉強記録")
-
-conn = get_connection()
-cursor = conn.cursor()
-
-cursor.execute("""
-SELECT study_date, subject, minutes, memo
-FROM study_records
-ORDER BY id DESC
-LIMIT 10
-""")
-
-recent_records = cursor.fetchall()
-
-conn.close()
-
-if recent_records:
-
-    for record in recent_records:
-
-        study_date = record[0]
-        subject_name = record[1]
-        minutes = record[2]
-        memo = record[3]
-
-        st.write(
-            f"📅 {study_date}　"
-            f"📚 {subject_name}　"
-            f"⏱️ {minutes}分　"
-            f"📝 {memo}"
-        )
-
-else:
-
-    st.write("まだ勉強記録がありません。")
+       
