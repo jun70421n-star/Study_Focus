@@ -402,5 +402,32 @@ if st.session_state.timer_running:
     col1, col2 = st.columns(2)
 
     with col1:
+            if st.button("⏸️ 一時停止"):
+            remaining_seconds = int(
+                (
+                    st.session_state.timer_end_time
+                    - datetime.now()
+                ).total_seconds()
+            )
+
+            st.session_state.timer_remaining_seconds = max(
+                remaining_seconds,
+                0
+            )
+
+            st.session_state.timer_paused = True
+            st.rerun()
+
+    with col2:
+        if st.button("▶️ 再開"):
+            st.session_state.timer_end_time = (
+                datetime.now()
+                + timedelta(
+                    seconds=st.session_state.timer_remaining_seconds
+                )
+            )
+
+            st.session_state.timer_paused = False
+            st.rerun()
 
        
