@@ -590,55 +590,33 @@ if targets:
         else:
             badge = "🔵 通常"
             border = "#1976d2"
-
         # 目標カード
-        st.markdown(
-            f"""
-            <div style="
-                border: 3px solid {border};
-                border-radius: 16px;
-                padding: 18px;
-                margin: 10px 0;
-                background: rgba(128,128,128,0.06);
-            ">
+        with st.container(border=True):
 
-                <div style="
-                    font-size: 15px;
-                    font-weight: bold;
-                ">
-                    {badge}
-                </div>
+            st.markdown(f"### 🎯 {title}")
 
-                <div style="
-                    font-size: 24px;
-                    font-weight: 700;
-                    margin-top: 5px;
-                ">
-                    🎯 {title}
-                </div>
+            st.write(f"**重要度：** {badge}")
 
-                <div style="
-                    font-size: 17px;
-                    margin-top: 6px;
-                ">
-                    目標日：
-                    <strong>
-                        {target_date_value.strftime("%Y/%m/%d")}
-                    </strong>
-                </div>
+            st.markdown(
+                f"**目標日：{target_date_value.strftime('%Y/%m/%d')}**"
+            )
 
-                <div style="
-                    font-size: 32px;
-                    font-weight: 900;
-                    margin-top: 8px;
-                ">
-                    {status_text}
-                </div>
+            if achieved:
+                st.success("🎉 達成！")
 
-            </div>
-            """,
-            unsafe_allow_html=True
-        )
+            elif days_left > 0:
+                st.markdown(
+                    f"## 🔥 あと {days_left} 日"
+                )
+
+            elif days_left == 0:
+                st.error("🔥 今日が目標日！")
+
+            else:
+                st.warning(
+                    f"⚠️ {abs(days_left)}日経過"
+                )
+        
 
         col1, col2 = st.columns(2)
 
