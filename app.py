@@ -75,6 +75,15 @@ def init_database():
         value INTEGER NOT NULL
     )
     """)
+     cur.execute("""
+    CREATE TABLE IF NOT EXISTS target_dates (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        title TEXT NOT NULL,
+        target_date TEXT NOT NULL,
+        priority TEXT NOT NULL DEFAULT '通常',
+        achieved INTEGER NOT NULL DEFAULT 0
+    )
+    """)
 
     conn.commit()
     conn.close()
@@ -236,6 +245,72 @@ def save_subject_goal(subject, minutes):
     conn.commit()
     conn.close()
 
+# =========================================================
+# 目標日
+# =========================================================
+
+def get_target_dates():
+    conn = get_connection()
+    cur = conn.cursor()
+
+    cur.execute("""
+    SELECT id, title, target_date, priority, achieved
+    FROM target_dates
+    ORDER BY achieved ASC, target_date ASC, id ASC
+    """)
+
+    rows = cur.fetchall()
+    conn.close()
+
+    return rows
+
+
+def save_target_date(title, target_date, priority):
+    conn = get_connection()
+    cur = conn.cursor()
+
+    cur.execute("""
+    INSERT INTO target_dates
+    (title, target_date, priority)
+    VALUES (?, ?, ?)
+    """, (
+        title,
+        str(target_date),
+        priority
+    ))
+
+    conn.commit()
+    conn.close()
+
+
+def update_target_achieved(target_id, achieved):
+    conn = get_connection()
+    cur = conn.cursor()
+
+    cur.execute("""
+    UPDATE target_dates
+    SET achieved = ?
+    WHERE id = ?
+    """, (
+        int(achieved),
+        target_id
+    ))
+
+    conn.commit()
+    conn.close()
+
+
+def delete_target_date(target_id):
+    conn = get_connection()
+    cur = conn.cursor()
+
+    cur.execute("""
+    DELETE FROM target_dates
+    WHERE id = ?
+    """, (target_id,))
+
+    conn.commit()
+    conn.close()
 
 # =========================================================
 # コメント・振り返り
@@ -466,7 +541,188 @@ achievement = (
 )
 
 st.header("🏠 今日のダッシュボード")
+# =========================================================
+# 🎯 MY GOALS
+# =========================================================
 
+st.subheader("🎯 MY GOALS")
+
+st.caption(
+    "勉強・部活・試験・イベントなど、自分で決めた目標日を登録できます。"
+)
+
+targets = get_target_dates()
+
+if targets:
+
+    for target_id, title, target_date_text, priority, achieved in targets:
+
+        target_date_value = datetime.strptime(
+            target_date_text,
+            "%Y-%m-%d"
+        ).date()
+
+        days_left = (target_date_value - today()).days
+
+        # 目標の状態
+        if achieved:
+            status_text = "🎉 達成！"
+
+        elif days_left > 0:
+            status_text = f"あと {days_left} 日"
+
+        elif days_left == 0:
+            status_text = "🔥 今日が目標日！"
+
+        else:
+            status_text = f"{abs(days_left)}日経過"
+
+        # 優先度
+        if priority == "最重要":
+            badge = "🔴 最重要"
+            border = "#e53935"
+
+        elif priority == "重要":
+            badge = "🟠 重要"
+            border = "#fb8c00"
+
+        else:
+            badge = "🔵 通常"
+            border = "#1976d2"
+
+        # 目標カード
+        st.markdown(
+            f"""
+            <div style="
+                border: 3px solid {border};
+                border-radius: 16px;
+                padding: 18px;
+                margin: 10px 0;
+                background: rgba(128,128,128,0.06);
+            ">
+
+                <div style="
+                    font-size: 15px;
+                    font-weight: bold;
+                ">
+                    {badge}
+                </div>
+
+                <div style="
+                    font-size: 24px;
+                    font-weight: 700;
+                    margin-top: 5px;
+                ">
+                    🎯 {title}
+                </div>
+
+                <div style="
+                    font-size: 17px;
+                    margin-top: 6px;
+                ">
+                    目標日：
+                    <strong>
+                        {target_date_value.strftime("%Y/%m/%d")}
+                    </strong>
+                </div>
+
+                <div style="
+                    font-size: 32px;
+                    font-weight: 900;
+                    margin-top: 8px;
+                ">
+                    {status_text}
+                </div>
+
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
+
+        col1, col2 = st.columns(2)
+
+        with col1:
+
+            new_achieved = st.checkbox(
+                "🎉 達成済みにする",
+                value=bool(achieved),
+                key=f"achieved_{target_id}"
+            )
+
+            if new_achieved != bool(achieved):
+
+                update_target_achieved(
+                    target_id,
+                    new_achieved
+                )
+
+                st.rerun()
+
+        with col2:
+
+            if st.button(
+                "🗑️ この目標を削除",
+                key=f"delete_target_{target_id}",
+                use_container_width=True
+            ):
+
+                delete_target_date(target_id)
+
+                st.rerun()
+
+else:
+
+    st.info(
+        "まだ目標がありません。「＋ 目標を追加」から登録できます。"
+    )
+
+
+# =========================================================
+# 目標追加
+# =========================================================
+
+with st.expander("＋ 目標を追加"):
+
+    target_title = st.text_input(
+        "目標名",
+        placeholder="例：英単語1900語を完成させる"
+    )
+
+    target_date = st.date_input(
+        "目標日",
+        value=today() + timedelta(days=30)
+    )
+
+    target_priority = st.selectbox(
+        "重要度",
+        [
+            "最重要",
+            "重要",
+            "通常"
+        ]
+    )
+
+    if st.button(
+        "🎯 この目標を追加",
+        type="primary",
+        use_container_width=True
+    ):
+
+        if not target_title.strip():
+
+            st.error("目標名を入力してください。")
+
+        else:
+
+            save_target_date(
+                target_title.strip(),
+                target_date,
+                target_priority
+            )
+
+            st.success("目標を追加しました！")
+
+            st.rerun()
 if "🎯 今日の目標" in selected_items:
     st.subheader("🎯 今日の目標")
 
