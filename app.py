@@ -796,6 +796,7 @@ month = selected_month.month
 month_data = get_month_data(year, month)
 
 calendar_df = pd.DataFrame(month_data)
+calendar_df["日付"] = pd.to_datetime(calendar_df["日付"])
 calendar_df["日"] = calendar_df["日付"].dt.day
 
 if calendar_df["勉強時間"].sum() > 0:
