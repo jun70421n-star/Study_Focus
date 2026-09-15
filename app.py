@@ -75,7 +75,8 @@ def init_database():
         value INTEGER NOT NULL
     )
     """)
-     cur.execute("""
+    
+    cur.execute("""
     CREATE TABLE IF NOT EXISTS target_dates (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         title TEXT NOT NULL,
