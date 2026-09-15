@@ -2,30 +2,20 @@ import streamlit as st
 import sqlite3
 from datetime import date, datetime, timedelta
 import pandas as pd
+import calendar
 
+DB_NAME = "study_focus.db"
 
-# =========================================================
-# 基本設定
-# =========================================================
+SUBJECTS = [
+    "英語", "国語", "数学", "理科", "社会",
+    "総合問題", "面接", "その他"
+]
 
 st.set_page_config(
     page_title="Study Focus",
     page_icon="📚",
     layout="wide"
 )
-
-DB_NAME = "study_focus.db"
-
-SUBJECTS = [
-    "英語",
-    "国語",
-    "数学",
-    "理科",
-    "社会",
-    "総合問題",
-    "面接",
-    "その他"
-]
 
 
 # =========================================================
@@ -36,12 +26,11 @@ def get_connection():
     return sqlite3.connect(DB_NAME)
 
 
-def create_tables():
-
+def init_database():
     conn = get_connection()
-    cursor = conn.cursor()
+    cur = conn.cursor()
 
-    cursor.execute("""
+    cur.execute("""
     CREATE TABLE IF NOT EXISTS study_records (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         study_date TEXT NOT NULL,
@@ -51,10 +40,39 @@ def create_tables():
     )
     """)
 
-    cursor.execute("""
+    cur.execute("""
     CREATE TABLE IF NOT EXISTS daily_goals (
         goal_date TEXT PRIMARY KEY,
         goal_minutes INTEGER NOT NULL
+    )
+    """)
+
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS subject_goals (
+        subject TEXT PRIMARY KEY,
+        goal_minutes INTEGER NOT NULL
+    )
+    """)
+
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS daily_comments (
+        comment_date TEXT PRIMARY KEY,
+        comment TEXT
+    )
+    """)
+
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS daily_reflections (
+        reflection_date TEXT PRIMARY KEY,
+        good TEXT,
+        tomorrow TEXT
+    )
+    """)
+
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS app_stats (
+        key TEXT PRIMARY KEY,
+        value INTEGER NOT NULL
     )
     """)
 
@@ -62,7 +80,28 @@ def create_tables():
     conn.close()
 
 
-create_tables()
+init_database()
+
+
+# =========================================================
+# 共通
+# =========================================================
+
+def today():
+    return date.today()
+
+
+def today_str():
+    return today().isoformat()
+
+
+def get_total_minutes():
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute("SELECT COALESCE(SUM(minutes), 0) FROM study_records")
+    value = cur.fetchone()[0]
+    conn.close()
+    return value
 
 
 # =========================================================
@@ -70,72 +109,74 @@ create_tables()
 # =========================================================
 
 def save_record(subject, minutes, memo=""):
-
     conn = get_connection()
-    cursor = conn.cursor()
-
-    cursor.execute("""
+    cur = conn.cursor()
+    cur.execute("""
     INSERT INTO study_records
     (study_date, subject, minutes, memo)
     VALUES (?, ?, ?, ?)
-    """, (
-        str(date.today()),
-        subject,
-        int(minutes),
-        memo
-    ))
-
+    """, (today_str(), subject, int(minutes), memo))
     conn.commit()
     conn.close()
 
 
 def delete_record(record_id):
-
     conn = get_connection()
-    cursor = conn.cursor()
-
-    cursor.execute("""
-    DELETE FROM study_records
-    WHERE id = ?
-    """, (record_id,))
-
+    cur = conn.cursor()
+    cur.execute("DELETE FROM study_records WHERE id = ?", (record_id,))
     conn.commit()
     conn.close()
 
 
-def get_today_minutes():
-
+def get_all_records():
     conn = get_connection()
-    cursor = conn.cursor()
-
-    cursor.execute("""
-    SELECT COALESCE(SUM(minutes), 0)
+    cur = conn.cursor()
+    cur.execute("""
+    SELECT id, study_date, subject, minutes, memo
     FROM study_records
-    WHERE study_date = ?
-    """, (str(date.today()),))
-
-    result = cursor.fetchone()[0]
-
-    conn.close()
-
-    return result
-
-
-def get_total_minutes():
-
-    conn = get_connection()
-    cursor = conn.cursor()
-
-    cursor.execute("""
-    SELECT COALESCE(SUM(minutes), 0)
-    FROM study_records
+    ORDER BY study_date DESC, id DESC
     """)
-
-    result = cursor.fetchone()[0]
-
+    rows = cur.fetchall()
     conn.close()
+    return rows
 
-    return result
+
+def get_period_minutes(start_date, end_date):
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute("""
+    SELECT COALESCE(SUM(minutes), 0)
+    FROM study_records
+    WHERE study_date BETWEEN ? AND ?
+    """, (str(start_date), str(end_date)))
+    value = cur.fetchone()[0]
+    conn.close()
+    return value
+
+
+def get_subject_totals(start_date=None, end_date=None):
+    conn = get_connection()
+    cur = conn.cursor()
+
+    if start_date is None:
+        cur.execute("""
+        SELECT subject, SUM(minutes)
+        FROM study_records
+        GROUP BY subject
+        ORDER BY SUM(minutes) DESC
+        """)
+    else:
+        cur.execute("""
+        SELECT subject, SUM(minutes)
+        FROM study_records
+        WHERE study_date BETWEEN ? AND ?
+        GROUP BY subject
+        ORDER BY SUM(minutes) DESC
+        """, (str(start_date), str(end_date)))
+
+    rows = cur.fetchall()
+    conn.close()
+    return rows
 
 
 # =========================================================
@@ -143,216 +184,167 @@ def get_total_minutes():
 # =========================================================
 
 def get_today_goal():
-
     conn = get_connection()
-    cursor = conn.cursor()
-
-    cursor.execute("""
+    cur = conn.cursor()
+    cur.execute("""
     SELECT goal_minutes
     FROM daily_goals
     WHERE goal_date = ?
-    """, (str(date.today()),))
-
-    result = cursor.fetchone()
-
+    """, (today_str(),))
+    row = cur.fetchone()
     conn.close()
-
-    if result:
-        return result[0]
-
-    return 180
+    return row[0] if row else 180
 
 
 def save_goal(minutes):
-
     conn = get_connection()
-    cursor = conn.cursor()
-
-    cursor.execute("""
+    cur = conn.cursor()
+    cur.execute("""
     INSERT OR REPLACE INTO daily_goals
     (goal_date, goal_minutes)
     VALUES (?, ?)
-    """, (
-        str(date.today()),
-        int(minutes)
-    ))
-
+    """, (today_str(), int(minutes)))
     conn.commit()
     conn.close()
 
 
 # =========================================================
-# 履歴データ
+# 科目別目標
 # =========================================================
 
-def get_all_records():
-
+def get_subject_goal(subject):
     conn = get_connection()
-    cursor = conn.cursor()
-
-    cursor.execute("""
-    SELECT id, study_date, subject, minutes, memo
-    FROM study_records
-    ORDER BY study_date DESC, id DESC
-    """)
-
-    records = cursor.fetchall()
-
+    cur = conn.cursor()
+    cur.execute("""
+    SELECT goal_minutes
+    FROM subject_goals
+    WHERE subject = ?
+    """, (subject,))
+    row = cur.fetchone()
     conn.close()
+    return row[0] if row else 0
 
-    return records
 
-
-def get_records_by_period(start_date, end_date):
-
+def save_subject_goal(subject, minutes):
     conn = get_connection()
-    cursor = conn.cursor()
-
-    cursor.execute("""
-    SELECT id, study_date, subject, minutes, memo
-    FROM study_records
-    WHERE study_date BETWEEN ? AND ?
-    ORDER BY study_date DESC, id DESC
-    """, (
-        str(start_date),
-        str(end_date)
-    ))
-
-    records = cursor.fetchall()
-
+    cur = conn.cursor()
+    cur.execute("""
+    INSERT OR REPLACE INTO subject_goals
+    (subject, goal_minutes)
+    VALUES (?, ?)
+    """, (subject, int(minutes)))
+    conn.commit()
     conn.close()
-
-    return records
-
-
-def get_period_minutes(start_date, end_date):
-
-    conn = get_connection()
-    cursor = conn.cursor()
-
-    cursor.execute("""
-    SELECT COALESCE(SUM(minutes), 0)
-    FROM study_records
-    WHERE study_date BETWEEN ? AND ?
-    """, (
-        str(start_date),
-        str(end_date)
-    ))
-
-    result = cursor.fetchone()[0]
-
-    conn.close()
-
-    return result
-
-
-def get_subject_totals(start_date=None, end_date=None):
-
-    conn = get_connection()
-    cursor = conn.cursor()
-
-    if start_date is None:
-
-        cursor.execute("""
-        SELECT subject, SUM(minutes)
-        FROM study_records
-        GROUP BY subject
-        ORDER BY SUM(minutes) DESC
-        """)
-
-    else:
-
-        cursor.execute("""
-        SELECT subject, SUM(minutes)
-        FROM study_records
-        WHERE study_date BETWEEN ? AND ?
-        GROUP BY subject
-        ORDER BY SUM(minutes) DESC
-        """, (
-            str(start_date),
-            str(end_date)
-        ))
-
-    result = cursor.fetchall()
-
-    conn.close()
-
-    return result
 
 
 # =========================================================
-# 連続勉強日数
+# コメント・振り返り
 # =========================================================
 
-def get_streak():
-
+def get_comment():
     conn = get_connection()
-    cursor = conn.cursor()
+    cur = conn.cursor()
+    cur.execute("""
+    SELECT comment FROM daily_comments
+    WHERE comment_date = ?
+    """, (today_str(),))
+    row = cur.fetchone()
+    conn.close()
+    return row[0] if row else ""
 
-    cursor.execute("""
+
+def save_comment(comment):
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute("""
+    INSERT OR REPLACE INTO daily_comments
+    (comment_date, comment)
+    VALUES (?, ?)
+    """, (today_str(), comment))
+    conn.commit()
+    conn.close()
+
+
+def get_reflection():
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute("""
+    SELECT good, tomorrow
+    FROM daily_reflections
+    WHERE reflection_date = ?
+    """, (today_str(),))
+    row = cur.fetchone()
+    conn.close()
+    return row if row else ("", "")
+
+
+def save_reflection(good, tomorrow):
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute("""
+    INSERT OR REPLACE INTO daily_reflections
+    (reflection_date, good, tomorrow)
+    VALUES (?, ?, ?)
+    """, (today_str(), good, tomorrow))
+    conn.commit()
+    conn.close()
+
+
+# =========================================================
+# 連続日数・最高記録
+# =========================================================
+
+def get_study_dates():
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute("""
     SELECT DISTINCT study_date
     FROM study_records
     WHERE minutes > 0
     ORDER BY study_date DESC
     """)
-
-    rows = cursor.fetchall()
-
+    rows = cur.fetchall()
     conn.close()
-
-    if not rows:
-        return 0
-
-    study_dates = [
+    return {
         datetime.strptime(row[0], "%Y-%m-%d").date()
         for row in rows
-    ]
+    }
 
-    today = date.today()
 
-    if study_dates[0] != today:
+def get_streak():
+    dates = get_study_dates()
+    if today() not in dates:
         return 0
 
     streak = 0
-    current_day = today
+    current = today()
 
-    for study_day in study_dates:
-
-        if study_day == current_day:
-
-            streak += 1
-            current_day -= timedelta(days=1)
-
-        elif study_day < current_day:
-
-            break
+    while current in dates:
+        streak += 1
+        current -= timedelta(days=1)
 
     return streak
 
 
-# =========================================================
-# 週間データ
-# =========================================================
+def get_max_streak():
+    dates = get_study_dates()
+    if not dates:
+        return 0
 
-def get_weekly_data():
+    max_streak = 0
+    current_streak = 0
+    previous = None
 
-    data = []
+    for d in sorted(dates):
+        if previous is not None and d == previous + timedelta(days=1):
+            current_streak += 1
+        else:
+            current_streak = 1
 
-    for i in range(6, -1, -1):
+        max_streak = max(max_streak, current_streak)
+        previous = d
 
-        target_day = date.today() - timedelta(days=i)
-
-        minutes = get_period_minutes(
-            target_day,
-            target_day
-        )
-
-        data.append({
-            "日付": target_day.strftime("%m/%d"),
-            "勉強時間": minutes
-        })
-
-    return data
+    return max_streak
 
 
 # =========================================================
@@ -360,71 +352,71 @@ def get_weekly_data():
 # =========================================================
 
 def get_badges():
-
     total = get_total_minutes()
     streak = get_streak()
-    today_minutes = get_today_minutes()
+    max_streak = get_max_streak()
+    today_minutes = get_period_minutes(today(), today)
     goal = get_today_goal()
 
-    badges = []
-
-    if total >= 60:
-        badges.append(
-            ("🌱", "はじめの一歩", "累計1時間")
-        )
-
-    if total >= 300:
-        badges.append(
-            ("🔥", "努力家", "累計5時間")
-        )
-
-    if total >= 1000:
-        badges.append(
-            ("🏆", "1000分突破", "累計1000分")
-        )
-
-    if streak >= 3:
-        badges.append(
-            ("🔥", "3日継続", "3日連続")
-        )
-
-    if streak >= 7:
-        badges.append(
-            ("💎", "1週間継続", "7日連続")
-        )
-
-    if today_minutes >= goal:
-        badges.append(
-            ("🎯", "目標達成", "今日の目標達成")
-        )
+    badges = [
+        ("🌱", "はじめの一歩", "初めて勉強を記録する", total >= 1),
+        ("⏱️", "1時間突破", "累計60分", total >= 60),
+        ("🔥", "努力家", "累計300分", total >= 300),
+        ("🏆", "1000分突破", "累計1000分", total >= 1000),
+        ("💎", "5000分突破", "累計5000分", total >= 5000),
+        ("🔥", "3日継続", "3日連続", max_streak >= 3),
+        ("💎", "1週間継続", "7日連続", max_streak >= 7),
+        ("👑", "30日継続", "30日連続", max_streak >= 30),
+        ("🎯", "今日の目標達成", "今日の目標を達成", today_minutes >= goal),
+    ]
 
     return badges
 
 
 # =========================================================
-# セッション状態
+# 週間データ・カレンダー
 # =========================================================
 
-if "timer_running" not in st.session_state:
-    st.session_state.timer_running = False
+def get_weekly_data():
+    rows = []
+    for i in range(6, -1, -1):
+        d = today() - timedelta(days=i)
+        rows.append({
+            "日付": d.strftime("%m/%d"),
+            "勉強時間": get_period_minutes(d, d)
+        })
+    return rows
 
-if "timer_paused" not in st.session_state:
-    st.session_state.timer_paused = False
 
-if "timer_subject" not in st.session_state:
-    st.session_state.timer_subject = "英語"
+def get_month_data(year, month):
+    days = calendar.monthrange(year, month)[1]
+    rows = []
 
-if "timer_memo" not in st.session_state:
-    st.session_state.timer_memo = ""
+    for day in range(1, days + 1):
+        d = date(year, month, day)
+        rows.append({
+            "日付": d,
+            "勉強時間": get_period_minutes(d, d)
+        })
 
-if "timer_total_seconds" not in st.session_state:
-    st.session_state.timer_total_seconds = 0
+    return rows
 
-if "timer_remaining_seconds" not in st.session_state:
-    st.session_state.timer_remaining_seconds = 0
 
-if "timer_end_time" not in st.session_state:
-    st.session_state.timer_end_time = None
+# =========================================================
+# タイマー
+# =========================================================
+
+for key, default in {
+    "timer_running": False,
+    "timer_paused": False,
+    "timer_subject": "英語",
+    "timer_memo": "",
+    "timer_total_seconds": 0,
+    "timer_remaining_seconds": 0,
+    "timer_end_time": None
+}.items():
+    if key not in st.session_state:
+        st.session_state[key] = default
 
 
 # =========================================================
@@ -432,11 +424,7 @@ if "timer_end_time" not in st.session_state:
 # =========================================================
 
 st.title("📚 Study Focus")
-
-st.write(
-    "勉強をもっと続けやすくするアプリ"
-)
-
+st.caption("勉強をもっと続けやすくするアプリ")
 st.divider()
 
 
@@ -445,10 +433,7 @@ st.divider()
 # =========================================================
 
 with st.sidebar:
-
     st.header("⚙️ 設定")
-
-    st.subheader("🏠 ダッシュボード")
 
     dashboard_items = [
         "🎯 今日の目標",
@@ -462,51 +447,32 @@ with st.sidebar:
     ]
 
     selected_items = st.multiselect(
-        "表示する項目",
+        "ホームに表示する項目",
         dashboard_items,
         default=dashboard_items
     )
 
 
 # =========================================================
-# 今日のデータ
+# ダッシュボード
 # =========================================================
 
+today_minutes = get_period_minutes(today(), today)
 goal_minutes = get_today_goal()
-today_minutes = get_today_minutes()
 
-if goal_minutes > 0:
-
-    achievement = min(
-        int(today_minutes / goal_minutes * 100),
-        100
-    )
-
-else:
-
-    achievement = 0
-
-remaining = max(
-    goal_minutes - today_minutes,
-    0
+achievement = (
+    min(int(today_minutes / goal_minutes * 100), 100)
+    if goal_minutes > 0 else 0
 )
-
-
-# =========================================================
-# 今日のダッシュボード
-# =========================================================
 
 st.header("🏠 今日のダッシュボード")
 
-
 if "🎯 今日の目標" in selected_items:
-
     st.subheader("🎯 今日の目標")
 
     col1, col2 = st.columns([3, 1])
 
     with col1:
-
         new_goal = st.number_input(
             "目標時間（分）",
             min_value=1,
@@ -516,81 +482,39 @@ if "🎯 今日の目標" in selected_items:
         )
 
     with col2:
-
         st.write("")
         st.write("")
-
-        if st.button(
-            "💾 保存",
-            use_container_width=True
-        ):
-
+        if st.button("💾 目標を保存", use_container_width=True):
             save_goal(new_goal)
-
-            st.success(
-                "目標を保存しました！"
-            )
-
+            st.success("保存しました！")
             st.rerun()
 
 
-# =========================================================
-# メトリクス
-# =========================================================
-
-metric_labels = []
-metric_values = []
-
+metrics = []
 
 if "⏱️ 今日の勉強時間" in selected_items:
-
-    metric_labels.append("⏱️ 今日の勉強時間")
-    metric_values.append(f"{today_minutes} 分")
-
+    metrics.append(("⏱️ 今日", f"{today_minutes}分"))
 
 if "📊 目標達成率" in selected_items:
-
-    metric_labels.append("📊 目標達成率")
-    metric_values.append(f"{achievement}%")
-
+    metrics.append(("📊 達成率", f"{achievement}%"))
 
 if "🔥 連続勉強日数" in selected_items:
+    metrics.append(("🔥 現在の連続日数", f"{get_streak()}日"))
 
-    metric_labels.append("🔥 連続勉強日数")
-    metric_values.append(f"{get_streak()} 日")
-
-
-if metric_labels:
-
-    cols = st.columns(len(metric_labels))
-
-    for i in range(len(metric_labels)):
-
-        with cols[i]:
-
-            st.metric(
-                metric_labels[i],
-                metric_values[i]
-            )
+if metrics:
+    cols = st.columns(len(metrics))
+    for col, (label, value) in zip(cols, metrics):
+        with col:
+            st.metric(label, value)
 
 
 if "📊 目標達成率" in selected_items:
+    st.progress(achievement / 100)
 
-    st.progress(
-        achievement / 100
-    )
-
-    if remaining == 0:
-
-        st.success(
-            "🎉 今日の目標達成！"
-        )
-
+    if today_minutes >= goal_minutes:
+        st.success("🎉 今日の目標達成！")
     else:
-
-        st.info(
-            f"📚 目標まであと {remaining} 分"
-        )
+        st.info(f"あと {goal_minutes - today_minutes} 分で達成です。")
 
 
 # =========================================================
@@ -598,57 +522,28 @@ if "📊 目標達成率" in selected_items:
 # =========================================================
 
 if "📈 週間グラフ" in selected_items:
-
     st.divider()
+    st.subheader("📈 過去7日間")
 
-    st.subheader(
-        "📈 過去7日間の勉強時間"
-    )
-
-    weekly_data = get_weekly_data()
-
-    weekly_df = pd.DataFrame(
-        weekly_data
-    )
-
-    st.bar_chart(
-        weekly_df.set_index("日付")
-    )
+    weekly_df = pd.DataFrame(get_weekly_data())
+    st.bar_chart(weekly_df.set_index("日付"))
 
 
 # =========================================================
-# 科目別時間
+# 科目別
 # =========================================================
 
 if "📚 科目別時間" in selected_items:
-
     st.divider()
+    st.subheader("📚 科目別勉強時間")
 
-    st.subheader(
-        "📚 科目別勉強時間"
-    )
+    data = get_subject_totals()
 
-    subject_data = get_subject_totals()
-
-    if subject_data:
-
-        subject_df = pd.DataFrame(
-            subject_data,
-            columns=[
-                "科目",
-                "勉強時間"
-            ]
-        )
-
-        st.bar_chart(
-            subject_df.set_index("科目")
-        )
-
+    if data:
+        df = pd.DataFrame(data, columns=["科目", "勉強時間"])
+        st.bar_chart(df.set_index("科目"))
     else:
-
-        st.info(
-            "まだ勉強記録がありません。"
-        )
+        st.info("まだ記録がありません。")
 
 
 # =========================================================
@@ -656,39 +551,18 @@ if "📚 科目別時間" in selected_items:
 # =========================================================
 
 if "🏆 バッジ" in selected_items:
-
     st.divider()
-
-    st.subheader(
-        "🏆 獲得バッジ"
-    )
+    st.subheader("🏆 バッジ")
 
     badges = get_badges()
+    cols = st.columns(3)
 
-    if badges:
-
-        cols = st.columns(
-            min(len(badges), 3)
-        )
-
-        for i, badge in enumerate(badges):
-
-            icon = badge[0]
-            name = badge[1]
-            description = badge[2]
-
-            with cols[i % len(cols)]:
-
-                st.success(
-                    f"{icon} **{name}**\n\n"
-                    f"{description}"
-                )
-
-    else:
-
-        st.info(
-            "勉強を続けるとバッジを獲得できます！"
-        )
+    for i, (icon, name, condition, achieved) in enumerate(badges):
+        with cols[i % 3]:
+            if achieved:
+                st.success(f"{icon} **{name}**\n\n{condition}")
+            else:
+                st.info(f"🔒 **{name}**\n\n{condition}")
 
 
 # =========================================================
@@ -696,27 +570,18 @@ if "🏆 バッジ" in selected_items:
 # =========================================================
 
 st.divider()
-
 st.header("⏱️ 勉強タイマー")
-
-
-# タイマー開始前
 
 if not st.session_state.timer_running:
 
     col1, col2 = st.columns(2)
 
     with col1:
-
-        subject = st.selectbox(
-            "📚 科目",
-            SUBJECTS
-        )
+        subject = st.selectbox("📚 科目", SUBJECTS)
 
     with col2:
-
         timer_minutes = st.number_input(
-            "⏰ 勉強時間（分）",
+            "⏰ 時間（分）",
             min_value=1,
             max_value=600,
             value=25,
@@ -724,8 +589,8 @@ if not st.session_state.timer_running:
         )
 
     timer_memo = st.text_input(
-        "📝 勉強メモ（任意）",
-        placeholder="例：英語長文ポラリス1を1題"
+        "📝 メモ（任意）",
+        placeholder="例：英語長文を1題"
     )
 
     if st.button(
@@ -733,180 +598,105 @@ if not st.session_state.timer_running:
         type="primary",
         use_container_width=True
     ):
-
         st.session_state.timer_subject = subject
-
         st.session_state.timer_memo = timer_memo
-
-        st.session_state.timer_total_seconds = (
-            int(timer_minutes) * 60
-        )
-
-        st.session_state.timer_remaining_seconds = (
-            int(timer_minutes) * 60
-        )
-
+        st.session_state.timer_total_seconds = int(timer_minutes) * 60
+        st.session_state.timer_remaining_seconds = int(timer_minutes) * 60
         st.session_state.timer_end_time = (
-            datetime.now()
-            + timedelta(
-                minutes=int(timer_minutes)
-            )
+            datetime.now() + timedelta(minutes=int(timer_minutes))
         )
-
         st.session_state.timer_running = True
         st.session_state.timer_paused = False
-
         st.rerun()
-
-
-# =========================================================
-# タイマー動作中
-# =========================================================
 
 else:
 
     if not st.session_state.timer_paused:
-
-        remaining_seconds = int(
+        remaining = int(
             (
                 st.session_state.timer_end_time
                 - datetime.now()
             ).total_seconds()
         )
+        st.session_state.timer_remaining_seconds = max(remaining, 0)
 
-        st.session_state.timer_remaining_seconds = max(
-            remaining_seconds,
-            0
-        )
+    remaining = st.session_state.timer_remaining_seconds
+    mm = remaining // 60
+    ss = remaining % 60
 
-    remaining_seconds = (
-        st.session_state.timer_remaining_seconds
-    )
-
-    minutes_left = (
-        remaining_seconds // 60
-    )
-
-    seconds_left = (
-        remaining_seconds % 60
-    )
-
-    st.subheader(
-        f"📚 {st.session_state.timer_subject}"
-    )
+    st.write(f"📚 科目：**{st.session_state.timer_subject}**")
 
     if st.session_state.timer_paused:
-
-        st.warning(
-            "⏸️ 一時停止中"
-        )
+        st.warning("⏸️ 一時停止中")
 
     st.markdown(
         f"""
         <div style="
             text-align:center;
-            font-size:70px;
+            font-size:72px;
             font-weight:bold;
             padding:20px;
         ">
-        {minutes_left:02d}:{seconds_left:02d}
+        {mm:02d}:{ss:02d}
         </div>
         """,
         unsafe_allow_html=True
     )
 
-    # 終了
+    if remaining <= 0:
+        elapsed = st.session_state.timer_total_seconds // 60
 
-    if remaining_seconds <= 0:
-
-        elapsed_minutes = (
-            st.session_state.timer_total_seconds
-            // 60
-        )
-
-        save_record(
-            st.session_state.timer_subject,
-            elapsed_minutes,
-            st.session_state.timer_memo
-        )
+        if elapsed > 0:
+            save_record(
+                st.session_state.timer_subject,
+                elapsed,
+                st.session_state.timer_memo
+            )
 
         st.session_state.timer_running = False
         st.session_state.timer_paused = False
         st.session_state.timer_end_time = None
 
-        st.success(
-            f"🎉 {elapsed_minutes}分の勉強を記録しました！"
-        )
-
+        st.success(f"🎉 {elapsed}分を記録しました！")
         st.balloons()
-
         st.rerun()
-
-    # ボタン
 
     col1, col2, col3 = st.columns(3)
 
     with col1:
-
         if not st.session_state.timer_paused:
-
-            if st.button(
-                "⏸️ 一時停止",
-                use_container_width=True
-            ):
-
-                remaining_seconds = int(
+            if st.button("⏸️ 一時停止", use_container_width=True):
+                remaining = int(
                     (
                         st.session_state.timer_end_time
                         - datetime.now()
                     ).total_seconds()
                 )
-
                 st.session_state.timer_remaining_seconds = max(
-                    remaining_seconds,
-                    0
+                    remaining, 0
                 )
-
                 st.session_state.timer_paused = True
-
                 st.rerun()
 
     with col2:
-
         if st.session_state.timer_paused:
-
-            if st.button(
-                "▶️ 再開",
-                use_container_width=True
-            ):
-
+            if st.button("▶️ 再開", use_container_width=True):
                 st.session_state.timer_end_time = (
                     datetime.now()
                     + timedelta(
                         seconds=st.session_state.timer_remaining_seconds
                     )
                 )
-
                 st.session_state.timer_paused = False
-
                 st.rerun()
 
     with col3:
-
-        if st.button(
-            "🛑 終了して保存",
-            use_container_width=True
-        ):
-
+        if st.button("🛑 終了して保存", use_container_width=True):
             elapsed_seconds = (
                 st.session_state.timer_total_seconds
                 - st.session_state.timer_remaining_seconds
             )
-
-            elapsed_minutes = max(
-                elapsed_seconds // 60,
-                1
-            )
+            elapsed_minutes = max(elapsed_seconds // 60, 1)
 
             save_record(
                 st.session_state.timer_subject,
@@ -918,21 +708,126 @@ else:
             st.session_state.timer_paused = False
             st.session_state.timer_end_time = None
 
-            st.success(
-                f"📝 {elapsed_minutes}分を記録しました！"
-            )
-
+            st.success(f"📝 {elapsed_minutes}分を記録しました！")
             st.rerun()
 
 
 # =========================================================
-# 勉強履歴・分析
+# 科目別目標
 # =========================================================
 
 st.divider()
+st.header("🎯 科目別目標")
 
-st.header("📊 勉強履歴・分析")
+col1, col2 = st.columns(2)
 
+with col1:
+    goal_subject = st.selectbox(
+        "科目",
+        SUBJECTS,
+        key="goal_subject"
+    )
+
+with col2:
+    current = get_subject_goal(goal_subject)
+    subject_goal = st.number_input(
+        "目標時間（分）",
+        min_value=0,
+        max_value=10000,
+        value=int(current),
+        step=10
+    )
+
+if st.button("💾 科目別目標を保存"):
+    save_subject_goal(goal_subject, subject_goal)
+    st.success(f"{goal_subject}の目標を保存しました！")
+
+
+# =========================================================
+# 今日の振り返り
+# =========================================================
+
+st.divider()
+st.header("💬 今日の振り返り")
+
+old_comment = get_comment()
+good_old, tomorrow_old = get_reflection()
+
+comment = st.text_area(
+    "今日の一言",
+    value=old_comment,
+    placeholder="今日の気分や勉強について一言"
+)
+
+good = st.text_area(
+    "✅ 今日できたこと",
+    value=good_old,
+    placeholder="例：英語長文を2題できた"
+)
+
+tomorrow = st.text_area(
+    "📌 明日やること",
+    value=tomorrow_old,
+    placeholder="例：総合問題の図表問題を30分やる"
+)
+
+if st.button("💾 振り返りを保存"):
+    save_comment(comment)
+    save_reflection(good, tomorrow)
+    st.success("振り返りを保存しました！")
+
+
+# =========================================================
+# カレンダー
+# =========================================================
+
+st.divider()
+st.header("📅 勉強カレンダー")
+
+selected_month = st.date_input(
+    "確認する月",
+    value=today(),
+    key="calendar_month"
+)
+
+year = selected_month.year
+month = selected_month.month
+
+month_data = get_month_data(year, month)
+
+calendar_df = pd.DataFrame(month_data)
+calendar_df["日"] = calendar_df["日付"].dt.day
+
+if calendar_df["勉強時間"].sum() > 0:
+    st.bar_chart(
+        calendar_df.set_index("日")
+        [["勉強時間"]]
+    )
+else:
+    st.info("この月にはまだ勉強記録がありません。")
+
+study_days = sum(
+    minutes > 0
+    for minutes in calendar_df["勉強時間"]
+)
+
+month_total = int(calendar_df["勉強時間"].sum())
+
+col1, col2 = st.columns(2)
+
+with col1:
+    st.metric("📅 勉強した日数", f"{study_days}日")
+
+with col2:
+    st.metric("⏱️ 月間勉強時間", f"{month_total}分")
+
+
+# =========================================================
+# 履歴・分析
+# =========================================================
+
+st.divider()
+st.header("📊 履歴・分析")
 
 tab1, tab2, tab3 = st.tabs([
     "📊 分析",
@@ -941,269 +836,157 @@ tab1, tab2, tab3 = st.tabs([
 ])
 
 
-# =========================================================
-# 分析
-# =========================================================
-
 with tab1:
 
-    st.subheader(
-        "📊 勉強時間の分析"
-    )
+    today_date = today()
+    week_start = today_date - timedelta(days=6)
+    month_start = today_date.replace(day=1)
 
-    today = date.today()
-
-    week_start = (
-        today - timedelta(days=6)
-    )
-
-    month_start = today.replace(
-        day=1
-    )
-
-    week_minutes = get_period_minutes(
+    week_total = get_period_minutes(
         week_start,
-        today
+        today_date
     )
 
-    month_minutes = get_period_minutes(
+    month_total = get_period_minutes(
         month_start,
-        today
+        today_date
     )
 
-    total_minutes = get_total_minutes()
+    total = get_total_minutes()
 
     col1, col2, col3, col4 = st.columns(4)
 
     with col1:
-
-        st.metric(
-            "今日",
-            f"{today_minutes}分"
-        )
+        st.metric("今日", f"{today_minutes}分")
 
     with col2:
-
-        st.metric(
-            "今週",
-            f"{week_minutes}分"
-        )
+        st.metric("今週", f"{week_total}分")
 
     with col3:
-
-        st.metric(
-            "今月",
-            f"{month_minutes}分"
-        )
+        st.metric("今月", f"{month_total}分")
 
     with col4:
+        st.metric("累計", f"{total}分")
 
-        st.metric(
-            "累計",
-            f"{total_minutes}分"
-        )
-
-    st.divider()
-
-    st.subheader(
-        "📈 今週の勉強時間"
-    )
-
-    weekly_data = get_weekly_data()
-
-    weekly_df = pd.DataFrame(
-        weekly_data
-    )
-
-    st.bar_chart(
-        weekly_df.set_index("日付")
-    )
-
-    st.subheader(
-        "📚 今月の科目別勉強時間"
-    )
-
-    month_subjects = get_subject_totals(
-        month_start,
-        today
-    )
-
-    if month_subjects:
-
-        month_df = pd.DataFrame(
-            month_subjects,
-            columns=[
-                "科目",
-                "勉強時間"
-            ]
-        )
-
-        st.bar_chart(
-            month_df.set_index("科目")
-        )
-
-    else:
-
-        st.info(
-            "今月の勉強記録はありません。"
-        )
-
-
-# =========================================================
-# 全履歴
-# =========================================================
-
-with tab2:
-
-    st.subheader(
-        "📅 勉強履歴"
-    )
-
-    records = get_all_records()
-
-    if not records:
-
-        st.info(
-            "まだ勉強記録がありません。"
-        )
-
-    else:
-
-        for record in records:
-
-            record_id = record[0]
-            study_date = record[1]
-            subject = record[2]
-            minutes = record[3]
-            memo = record[4]
-
-            col1, col2, col3, col4 = st.columns(
-                [1.4, 1, 1, 0.8]
-            )
-
-            with col1:
-
-                st.write(
-                    f"📅 {study_date}"
-                )
-
-            with col2:
-
-                st.write(
-                    f"📚 {subject}"
-                )
-
-            with col3:
-
-                st.write(
-                    f"⏱️ {minutes}分"
-                )
-
-            with col4:
-
-                if st.button(
-                    "🗑️ 削除",
-                    key=f"delete_{record_id}"
-                ):
-
-                    delete_record(
-                        record_id
-                    )
-
-                    st.rerun()
-
-            if memo:
-
-                st.caption(
-                    f"📝 {memo}"
-                )
-
-            st.divider()
-
-
-# =========================================================
-# 検索
-# =========================================================
-
-with tab3:
-
-    st.subheader(
-        "🔎 勉強記録を検索"
-    )
+    st.subheader("🔥 継続記録")
 
     col1, col2 = st.columns(2)
 
     with col1:
-
-        search_start = st.date_input(
-            "開始日",
-            value=date.today() - timedelta(days=30)
+        st.metric(
+            "現在の連続日数",
+            f"{get_streak()}日"
         )
 
     with col2:
+        st.metric(
+            "最高連続日数",
+            f"{get_max_streak()}日"
+        )
 
-        search_end = st.date_input(
+
+with tab2:
+
+    records = get_all_records()
+
+    if not records:
+        st.info("まだ勉強記録がありません。")
+
+    for record in records:
+
+        record_id, study_date, subject, minutes, memo = record
+
+        col1, col2, col3, col4 = st.columns(
+            [1.4, 1, 1, 0.7]
+        )
+
+        with col1:
+            st.write(f"📅 {study_date}")
+
+        with col2:
+            st.write(f"📚 {subject}")
+
+        with col3:
+            st.write(f"⏱️ {minutes}分")
+
+        with col4:
+            if st.button(
+                "🗑️",
+                key=f"delete_history_{record_id}"
+            ):
+                delete_record(record_id)
+                st.rerun()
+
+        if memo:
+            st.caption(f"📝 {memo}")
+
+        st.divider()
+
+
+with tab3:
+
+    col1, col2 = st.columns(2)
+
+    with col1:
+        start_date = st.date_input(
+            "開始日",
+            value=today() - timedelta(days=30),
+            key="search_start"
+        )
+
+    with col2:
+        end_date = st.date_input(
             "終了日",
-            value=date.today()
+            value=today(),
+            key="search_end"
         )
 
     search_subject = st.selectbox(
         "科目",
-        ["すべて"] + SUBJECTS
+        ["すべて"] + SUBJECTS,
+        key="search_subject"
     )
 
-    search_records = get_records_by_period(
-        search_start,
-        search_end
-    )
+    conn = get_connection()
+    cur = conn.cursor()
+
+    cur.execute("""
+    SELECT id, study_date, subject, minutes, memo
+    FROM study_records
+    WHERE study_date BETWEEN ? AND ?
+    ORDER BY study_date DESC, id DESC
+    """, (str(start_date), str(end_date)))
+
+    results = cur.fetchall()
+    conn.close()
 
     if search_subject != "すべて":
-
-        search_records = [
-            record
-            for record in search_records
-            if record[2] == search_subject
+        results = [
+            r for r in results
+            if r[2] == search_subject
         ]
 
-    search_total = sum(
-        record[3]
-        for record in search_records
-    )
+    result_total = sum(r[3] for r in results)
 
     st.metric(
         "🔎 検索結果の合計",
-        f"{search_total}分"
+        f"{result_total}分"
     )
 
-    if search_records:
-
-        for record in search_records:
-
-            record_id = record[0]
-            study_date = record[1]
-            subject = record[2]
-            minutes = record[3]
-            memo = record[4]
-
+    if results:
+        for record in results:
             st.write(
-                f"📅 **{study_date}**　"
-                f"📚 **{subject}**　"
-                f"⏱️ **{minutes}分**"
+                f"📅 **{record[1]}**　"
+                f"📚 **{record[2]}**　"
+                f"⏱️ **{record[3]}分**"
             )
 
-            if memo:
-
-                st.caption(
-                    f"📝 {memo}"
-                )
+            if record[4]:
+                st.caption(f"📝 {record[4]}")
 
             st.divider()
-
     else:
-
-        st.info(
-            "条件に一致する記録はありません。"
-        )
+        st.info("条件に一致する記録はありません。")
 
 
 # =========================================================
@@ -1213,17 +996,12 @@ with tab3:
 if "📝 最近の記録" in selected_items:
 
     st.divider()
+    st.subheader("📝 最近の勉強記録")
 
-    st.subheader(
-        "📝 最近の勉強記録"
-    )
+    recent = get_all_records()[:5]
 
-    recent_records = get_all_records()[:5]
-
-    if recent_records:
-
-        for record in recent_records:
-
+    if recent:
+        for record in recent:
             st.write(
                 f"📅 {record[1]}　"
                 f"📚 {record[2]}　"
@@ -1231,16 +1009,9 @@ if "📝 最近の記録" in selected_items:
             )
 
             if record[4]:
-
-                st.caption(
-                    f"📝 {record[4]}"
-                )
-
+                st.caption(f"📝 {record[4]}")
     else:
-
-        st.info(
-            "まだ勉強記録がありません。"
-        )
+        st.info("まだ記録がありません。")
 
 
 # =========================================================
